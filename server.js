@@ -1,64 +1,70 @@
 const express = require('express');
-const fs = require('fs');
-const https = require('https');
-const app = express();
-const server = https.createServer({
-    key: fs.readFileSync('key.pem'),
-    cert: fs.readFileSync('cert.pem')
-}, app);
-const io = require('socket.io')(server);
+const http = require('http'); // use http instead of https
+const { Server } = require('socket.io');
 
-app.get('/', (req, res) => {
-    res.sendFile(__dirname + '/index.html');
+const app = express();
+const server = http.createServer(app); // create http server
+const io = new Server(server, {
+  cors: {
+    origin: '*', // allow all origins for testing, tighten later in production
+    methods: ['GET', 'POST']
+  }
 });
 
+app.get('/', (req, res) => {
+  res.send('WebRTC signaling server is running');
+});
 
-
+// Store room info
 const rooms = new Map();
 
 io.on('connection', (socket) => {
-    console.log('User connected:', socket.id);
-    socket.on('join-room', (roomId) => {
-        if (!rooms.has(roomId)) {
-            rooms.set(roomId, new Set());
+  console.log('User connected:', socket.id);
+
+  socket.on('join-room', (roomId) => {
+    if (!rooms.has(roomId)) {
+      rooms.set(roomId, new Set());
+    }
+
+    const peers = rooms.get(roomId);
+    peers.add(socket.id);
+    socket.join(roomId);
+    console.log(`User ${socket.id} joined room ${roomId}`);
+
+    // Send other users in the room
+    socket.emit('room-joined', { roomId, peers: [...peers] });
+
+    // Notify others
+    socket.to(roomId).emit('user-joined', socket.id);
+  });
+
+  socket.on('offer', ({ offer, targetId }) => {
+    socket.to(targetId).emit('offer', { offer, from: socket.id });
+  });
+
+  socket.on('answer', ({ answer, targetId }) => {
+    socket.to(targetId).emit('answer', { answer, from: socket.id });
+  });
+
+  socket.on('ice-candidate', ({ candidate, targetId }) => {
+    socket.to(targetId).emit('ice-candidate', { candidate, from: socket.id });
+  });
+
+  socket.on('disconnect', () => {
+    console.log('User disconnected:', socket.id);
+    rooms.forEach((peers, roomId) => {
+      if (peers.delete(socket.id)) {
+        socket.to(roomId).emit('peer-disconnected', socket.id);
+        if (peers.size === 0) {
+          rooms.delete(roomId);
         }
-        const peers = rooms.get(roomId);
-        peers.add(socket.id);
-        console.log(`User ${socket.id} joined room ${roomId}, peers:`, [...peers]);
-        socket.join(roomId);
-        socket.emit('room-joined', { roomId, peers: [...peers] });
+      }
     });
-
-    socket.on('offer', ({ offer, roomId, targetId }) => {
-        console.log(`Offer from ${socket.id} to ${targetId} in room ${roomId}`);
-        socket.to(targetId).emit('offer', { offer, fromId: socket.id });
-    });
-
-    socket.on('answer', ({ answer, roomId, targetId }) => {
-        console.log(`Answer from ${socket.id} to ${targetId} in room ${roomId}`);
-        socket.to(targetId).emit('answer', { answer, fromId: socket.id });
-    });
-
-    socket.on('ice-candidate', ({ candidate, roomId, targetId }) => {
-        console.log(`ICE candidate from ${socket.id} to ${targetId} in room ${roomId}`);
-        socket.to(targetId).emit('ice-candidate', { candidate, fromId: socket.id });
-    });
-
-    socket.on('disconnect', () => {
-        console.log('User disconnected:', socket.id);
-        rooms.forEach((peers, roomId) => {
-            if (peers.has(socket.id)) {
-                peers.delete(socket.id);
-                if (peers.size === 0) {
-                    rooms.delete(roomId);
-                } else {
-                    io.to(roomId).emit('peer-disconnected', socket.id);
-                }
-            }
-        });
-    });
+  });
 });
 
-server.listen(3000, () => {
-    console.log('Server running on https://0.0.0.0:3000');
+// Use dynamic port for Render
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log(`Server running on http://0.0.0.0:${PORT}`);
 });
