@@ -1,40 +1,42 @@
 const express = require('express');
-const http = require('http'); // use http instead of https
+const fs = require('fs');
+const https = require('https'); // use https instead of http
 const { Server } = require('socket.io');
 
 const app = express();
-const server = http.createServer(app); // create http server
+
+// Replace with your actual certificate and key paths
+const sslOptions = {
+  key: fs.readFileSync('key.pem'),
+  cert: fs.readFileSync('cert.pem')
+};
+
+const server = https.createServer(sslOptions, app);
 const io = new Server(server, {
   cors: {
-    origin: '*', // allow all origins for testing, tighten later in production
+    origin: '*',
     methods: ['GET', 'POST']
   }
 });
 
 app.get('/', (req, res) => {
-  res.send('WebRTC signaling server is running');
+  res.send('WebRTC signaling server running on HTTPS');
 });
 
-// Store room info
+// Room handling (same as before)
 const rooms = new Map();
 
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
 
   socket.on('join-room', (roomId) => {
-    if (!rooms.has(roomId)) {
-      rooms.set(roomId, new Set());
-    }
+    if (!rooms.has(roomId)) rooms.set(roomId, new Set());
 
     const peers = rooms.get(roomId);
     peers.add(socket.id);
     socket.join(roomId);
-    console.log(`User ${socket.id} joined room ${roomId}`);
 
-    // Send other users in the room
     socket.emit('room-joined', { roomId, peers: [...peers] });
-
-    // Notify others
     socket.to(roomId).emit('user-joined', socket.id);
   });
 
@@ -51,20 +53,16 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    console.log('User disconnected:', socket.id);
     rooms.forEach((peers, roomId) => {
       if (peers.delete(socket.id)) {
         socket.to(roomId).emit('peer-disconnected', socket.id);
-        if (peers.size === 0) {
-          rooms.delete(roomId);
-        }
+        if (peers.size === 0) rooms.delete(roomId);
       }
     });
   });
 });
 
-// Use dynamic port for Render
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 443;
 server.listen(PORT, () => {
-  console.log(`Server running on http://0.0.0.0:${PORT}`);
+  console.log(`Server running on https://0.0.0.0:${PORT}`);
 });
